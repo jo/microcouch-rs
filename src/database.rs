@@ -1,24 +1,55 @@
-use core::future::ready;
-use core::time::Duration;
-use futures::{join, stream, Stream, StreamExt, TryStreamExt};
-use futures_batch::ChunksTimeoutStreamExt;
+use clap::lazy_static::lazy_static;
+use futures::future;
+use futures::{join, stream, StreamExt};
 use reqwest::StatusCode;
-use serde::Deserialize;
+use serde_json::json;
 use serde_json::value::Value;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::error::Error;
-use tokio::io::AsyncBufReadExt;
-use tokio_stream::wrappers::LinesStream;
-use tokio_util::io::StreamReader;
+use std::sync::{Arc, Mutex};
+use tokio::time::Instant;
 use url::Url;
 use uuid::Uuid;
 
-// TODO: maybe we don't need this and can use a HashMap directly
-#[derive(Deserialize, Debug)]
-struct ChangeRow {
+lazy_static! {
+    static ref START_TIME: Instant = Instant::now();
+}
+
+#[derive(Debug)]
+pub struct ReplicationBatch {
+    last_seq: String,
+    changes: Vec<Change>,
+}
+
+// just for debugging
+impl ReplicationBatch {
+    fn nr(&self) -> String {
+        let (nr, _) = self.last_seq.split_once("-").unwrap();
+        nr.to_string()
+    }
+}
+
+#[derive(serde::Serialize, Debug)]
+struct Revisions {
+    start: usize,
+    ids: Vec<String>,
+}
+
+#[derive(Debug)]
+struct Change {
     id: String,
-    seq: Option<String>,
-    changes: Vec<Rev>,
+    revs: Vec<Rev>,
+}
+
+#[derive(Debug)]
+struct Rev {
+    rev: String,
+    doc: Option<Value>,
+}
+
+struct ChangesOptions {
+    since: Option<String>,
 }
 
 // TODO: maybe we don't need this and can use HashMap directly
@@ -46,17 +77,12 @@ struct DocsResponse {
 #[derive(serde::Deserialize, Debug)]
 struct DocsResponseEntry {
     id: String,
-    docs: Vec<DocsResponseDoc>,
-}
-
-#[derive(serde::Deserialize, Debug)]
-struct DocsResponseDoc {
-    ok: Value,
+    docs: Vec<Value>,
 }
 
 #[derive(serde::Serialize, Debug)]
-struct BulkDocsRequest {
-    docs: Vec<Value>,
+struct BulkDocsRequest<'a> {
+    docs: Vec<&'a Value>,
     new_edits: bool,
 }
 
@@ -70,27 +96,11 @@ pub struct DatabaseInfo {
     pub update_seq: String,
 }
 
-// TODO: get rid of _rev here
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
-struct ReplicationLog {
+pub struct ReplicationLog {
     _id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    _rev: Option<String>,
-    source_last_seq: Option<String>,
-    session_id: Option<Uuid>,
-}
-
-#[derive(Debug)]
-pub struct Revs {
-    id: String,
-    seq: Option<String>,
-    revs: Vec<Rev>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Rev {
-    rev: String,
-    doc: Option<Value>,
+    source_last_seq: String,
+    session_id: String,
 }
 
 #[derive(Debug)]
@@ -99,81 +109,47 @@ pub struct ReplicationStats {}
 async fn replicate(
     source: &Database,
     target: &Database,
+    concurrency: usize,
+    batch_size: usize,
 ) -> Result<Option<ReplicationStats>, Box<dyn Error>> {
     let infos = get_infos(source, target).await;
-
     let source_server_info = infos.0?.unwrap();
     let target_server_info = infos.1?.unwrap();
-    let source_db_info = infos.2?.unwrap();
-    let target_db_info = infos.3?.unwrap();
 
     let replication_id = replication_id(source_server_info, target_server_info);
+    let session_id = Uuid::new_v4();
 
     let logs = get_replication_logs(source, target, &replication_id).await;
-
-    let mut source_replication_log = logs.0?;
-    let mut target_replication_log = logs.1?;
-
+    let source_replication_log = logs.0?;
+    let target_replication_log = logs.1?;
     let since = find_common_ancestor(&source_replication_log, &target_replication_log);
-    println!("replicating since {:?}...", since);
 
-    // TODO: do we want a new session id for each batch?
-    let session_id = Uuid::new_v4();
-    source_replication_log.session_id = Some(session_id);
-    target_replication_log.session_id = Some(session_id);
+    let options = ChangesOptions { since };
+    let options = Arc::new(Mutex::new(options));
 
-    let concurrency = 8;
-    let batch_size = 128;
+    let batches: Vec<ReplicationBatch> = stream::iter(0..)
+        .then(|_i| async {
+            let mut options = options.lock().unwrap();
 
-    let mut stream = source
-        // get changes
-        .get_changes(&since)
-        .await?
-        // replicate batches
-        .chunks_timeout(batch_size, Duration::new(0, 200 * 1000 * 1000))
-        .map(|batch| {
-            replicate_batch(
-                &source,
-                &target,
-                &source_replication_log,
-                &target_replication_log,
-                batch,
-            )
+            let changes = source.get_changes(options.since.clone(), batch_size).await;
+
+            let seq = changes.last_seq.clone();
+            options.since = Some(seq);
+
+            changes
         })
+        .take_while(|x| future::ready(x.changes.len() > 0))
+        .map(|x| replicate_batch(source, target, x))
         .buffered(concurrency)
-        // store checkpoints
-        .map(|batch| batch.unwrap())
-        .flat_map(|batch| stream::iter(batch))
-        .chunks_timeout(batch_size * concurrency, Duration::new(10, 0))
-        .map(|mut batch| {
-            let revs = batch.pop().unwrap();
+        .then(|x| save_replication_logs(source, target, &replication_id, &session_id, x))
+        .collect()
+        .await;
 
-            let source_replication_log = ReplicationLog {
-                _id: source_replication_log._id.clone(),
-                _rev: source_replication_log._rev.clone(),
-                source_last_seq: revs.seq.clone(),
-                session_id: Some(session_id.clone()),
-            };
-            let target_replication_log = ReplicationLog {
-                _id: target_replication_log._id.clone(),
-                _rev: target_replication_log._rev.clone(),
-                source_last_seq: revs.seq.clone(),
-                session_id: Some(session_id.clone()),
-            };
-            save_replication_logs(
-                &source,
-                &target,
-                source_replication_log,
-                target_replication_log,
-            )
-        })
-        // drain stream
-        .filter_map(|x| async move { x.await.ok().map(Ok) })
-        .forward(futures::sink::drain())
-        .await
-        .unwrap();
-
-    println!("replication since {:?} done", since);
+    println!(
+        "[{}] replication completed in {} batches",
+        START_TIME.elapsed().as_millis(),
+        batches.len()
+    );
 
     Ok(Some(ReplicationStats {}))
 }
@@ -181,15 +157,29 @@ async fn replicate(
 async fn replicate_batch(
     source: &Database,
     target: &Database,
-    source_replication_log: &ReplicationLog,
-    target_replication_log: &ReplicationLog,
-    batch: Vec<Revs>,
-) -> Result<Vec<Revs>, Box<dyn Error>> {
-    let diffs = target.get_diff(batch).await?;
-    let revs = source.get_revs(diffs).await?;
-    let save = target.save_revs(revs).await?;
+    batch: ReplicationBatch,
+) -> ReplicationBatch {
+    let no = batch.nr();
+    println!(
+        "[{}] # replicate_batch {}",
+        START_TIME.elapsed().as_millis(),
+        no
+    );
 
-    Ok(save)
+    let diffs = target.get_diff(batch).await;
+    let revs = source.get_revs(diffs).await;
+    let save = target.save_revs(revs).await;
+
+    println!(
+        "[{}] # replicate_batch {} completed",
+        START_TIME.elapsed().as_millis(),
+        no
+    );
+
+    ReplicationBatch {
+        last_seq: save.last_seq,
+        changes: vec![],
+    }
 }
 
 async fn get_infos(
@@ -198,19 +188,10 @@ async fn get_infos(
 ) -> (
     Result<std::option::Option<ServerInfo>, Box<dyn Error>>,
     Result<std::option::Option<ServerInfo>, Box<dyn Error>>,
-    Result<std::option::Option<DatabaseInfo>, Box<dyn Error>>,
-    Result<std::option::Option<DatabaseInfo>, Box<dyn Error>>,
 ) {
     let source_server_info = source.get_server_info();
     let target_server_info = target.get_server_info();
-    let source_db_info = source.get_database_info();
-    let target_db_info = target.get_database_info();
-    join!(
-        source_server_info,
-        target_server_info,
-        source_db_info,
-        target_db_info
-    )
+    join!(source_server_info, target_server_info)
 }
 
 fn replication_id(source_server_info: ServerInfo, target_server_info: ServerInfo) -> String {
@@ -224,8 +205,8 @@ async fn get_replication_logs(
     target: &Database,
     replication_id: &str,
 ) -> (
-    Result<ReplicationLog, Box<dyn Error>>,
-    Result<ReplicationLog, Box<dyn Error>>,
+    Result<Option<ReplicationLog>, Box<dyn Error>>,
+    Result<Option<ReplicationLog>, Box<dyn Error>>,
 ) {
     let source_replication_log = source.get_replication_log(replication_id);
     let target_replication_log = target.get_replication_log(replication_id);
@@ -235,36 +216,43 @@ async fn get_replication_logs(
 async fn save_replication_logs(
     source: &Database,
     target: &Database,
-    source_replication_log: ReplicationLog,
-    target_replication_log: ReplicationLog,
-) -> Result<(), Box<dyn Error>> {
-    // TODO: can we save them in parallel?
-    // let save_source_replication_log = source.save_replication_log(&source_replication_log);
-    // let save_target_replication_log = target.save_replication_log(&target_replication_log);
-    // let request = join!(save_source_replication_log, save_target_replication_log);
+    replication_id: &str,
+    session_id: &Uuid,
+    batch: ReplicationBatch,
+) -> ReplicationBatch {
+    // TODO: can't we do this in parallel?
+    source
+        .save_replication_log(replication_id, session_id, &batch.last_seq)
+        .await
+        .expect("could not save source replication log");
+    target
+        .save_replication_log(replication_id, session_id, &batch.last_seq)
+        .await
+        .expect("could not save target replication log");
 
-    source.save_replication_log(&source_replication_log).await?;
-    target.save_replication_log(&target_replication_log).await?;
-
-    Ok(())
+    batch
 }
 
 fn find_common_ancestor(
-    source_replication_log: &ReplicationLog,
-    target_replication_log: &ReplicationLog,
+    source_replication_log: &Option<ReplicationLog>,
+    target_replication_log: &Option<ReplicationLog>,
 ) -> Option<String> {
-    match source_replication_log.session_id == target_replication_log.session_id {
-        true => match &source_replication_log.source_last_seq {
-            Some(source_last_seq) => match &target_replication_log.source_last_seq {
-                Some(target_source_last_seq) => match source_last_seq == target_source_last_seq {
-                    true => Some(source_last_seq.to_string()),
+    match source_replication_log {
+        Some(source_replication_log) => match target_replication_log {
+            Some(target_replication_log) => {
+                match source_replication_log.session_id == target_replication_log.session_id {
+                    true => match source_replication_log.source_last_seq
+                        == target_replication_log.source_last_seq
+                    {
+                        true => Some(source_replication_log.source_last_seq.to_string()),
+                        false => None,
+                    },
                     false => None,
-                },
-                None => None,
-            },
+                }
+            }
             None => None,
         },
-        false => None,
+        None => None,
     }
 }
 
@@ -280,15 +268,10 @@ impl Database {
     pub async fn pull(
         &self,
         source: &Database,
+        concurrency: usize,
+        batch_size: usize,
     ) -> Result<Option<ReplicationStats>, Box<dyn Error>> {
-        replicate(source, self).await
-    }
-
-    pub async fn push(
-        &self,
-        target: &Database,
-    ) -> Result<Option<ReplicationStats>, Box<dyn Error>> {
-        replicate(self, target).await
+        replicate(source, self, concurrency, batch_size).await
     }
 
     pub async fn get_server_info(&self) -> Result<Option<ServerInfo>, Box<dyn Error>> {
@@ -308,26 +291,10 @@ impl Database {
         }
     }
 
-    pub async fn get_database_info(&self) -> Result<Option<DatabaseInfo>, Box<dyn Error>> {
-        let url = self.url.clone();
-
-        let response = reqwest::get(url).await?;
-        match response.status() {
-            StatusCode::OK => {
-                let data = response.json::<DatabaseInfo>().await?;
-                Ok(Some(data))
-            }
-            _ => {
-                let text = response.text().await?;
-                panic!("Problem reading database info: {}", text)
-            }
-        }
-    }
-
     pub async fn get_replication_log(
         &self,
         replication_id: &str,
-    ) -> Result<ReplicationLog, Box<dyn Error>> {
+    ) -> Result<Option<ReplicationLog>, Box<dyn Error>> {
         println!("get replication log...");
 
         let id = format!("_local/{}", replication_id);
@@ -337,15 +304,11 @@ impl Database {
         let response = reqwest::get(url).await?;
         match response.status() {
             StatusCode::OK => {
-                let data = response.json::<ReplicationLog>().await?;
-                Ok(data)
+                let log = response.json::<ReplicationLog>().await?;
+                println!("got replication log");
+                Ok(Some(log))
             }
-            StatusCode::NOT_FOUND => Ok(ReplicationLog {
-                _id: id,
-                _rev: None,
-                source_last_seq: None,
-                session_id: None,
-            }),
+            StatusCode::NOT_FOUND => Ok(None),
             _ => {
                 let text = response.text().await?;
                 panic!("Problem reading replication log: {}", text)
@@ -355,23 +318,30 @@ impl Database {
 
     pub async fn save_replication_log(
         &self,
-        replication_log: &ReplicationLog,
+        replication_id: &str,
+        session_id: &Uuid,
+        source_last_seq: &str,
     ) -> Result<(), Box<dyn Error>> {
-        println!(
-            "save replication log at checkpoint {:?}",
-            replication_log.source_last_seq
-        );
+        let id = format!("_local/{}", replication_id);
 
         let mut url = self.url.clone();
-        url.path_segments_mut().unwrap().push(&replication_log._id);
+        url.path_segments_mut().unwrap().push(&id);
+
+        println!("save replication log at checkpoint {}", source_last_seq);
+
+        let replication_log = ReplicationLog {
+            _id: id,
+            source_last_seq: source_last_seq.to_string(),
+            session_id: session_id.to_string(),
+        };
 
         let client = reqwest::Client::new();
         let response = client.put(url).json(&replication_log).send().await?;
         match response.status() {
             StatusCode::CREATED => {
                 println!(
-                    "save replication log at checkpoint {:?} done",
-                    replication_log.source_last_seq
+                    "save replication log at checkpoint {} done",
+                    source_last_seq
                 );
                 Ok(())
             }
@@ -382,129 +352,222 @@ impl Database {
         }
     }
 
-    pub async fn get_changes(
-        &self,
-        since: &Option<String>,
-    ) -> Result<impl Stream<Item = Revs>, Box<dyn Error>> {
-        println!("get changes...");
+    async fn get_changes(&self, since: Option<String>, batch_size: usize) -> ReplicationBatch {
+        println!(
+            "[{}] # get_changes {:?}",
+            START_TIME.elapsed().as_millis(),
+            since
+        );
 
+        let limit = batch_size.to_string();
         let mut url = self.url.clone();
         url.path_segments_mut().unwrap().push("_changes");
-        url.query_pairs_mut().append_pair("feed", "continuous");
-        url.query_pairs_mut().append_pair("timeout", "0");
+        url.query_pairs_mut().append_pair("feed", "normal");
         url.query_pairs_mut().append_pair("style", "all_docs");
-        // url.query_pairs_mut().append_pair("seq_interval", "100");
+        url.query_pairs_mut().append_pair("limit", &limit);
+        url.query_pairs_mut().append_pair("seq_interval", &limit);
+        url.query_pairs_mut().append_pair("include_docs", "true");
+        url.query_pairs_mut().append_pair("attachments", "true");
         match since {
-            Some(since) => {
-                url.query_pairs_mut().append_pair("since", since);
+            Some(ref since) => {
+                url.query_pairs_mut().append_pair("since", &since);
             }
             None => {}
         };
 
         let client = reqwest::Client::new();
 
-        let response = client.get(url).send().await?.bytes_stream();
+        let response = client.get(url).send().await;
 
-        fn convert_err(err: reqwest::Error) -> std::io::Error {
-            todo!()
-        }
-        let reader = StreamReader::new(response.map_err(convert_err));
+        match response {
+            Ok(response) => {
+                match response.status() {
+                    StatusCode::OK => {
+                        let result = response.json::<Value>().await;
+                        match result {
+                            Ok(mut res) => {
+                                let result = res
+                                    .as_object_mut()
+                                    .expect("changes result is not an object");
 
-        let lines = reader.lines();
-        let lines_stream = LinesStream::new(lines);
+                                let last_seq = result
+                                    .remove("last_seq")
+                                    .expect("missing last_seq")
+                                    .as_str()
+                                    .expect("last_seq is not a string")
+                                    .to_string();
 
-        let changes_stream = lines_stream.map(|line| match line {
-            Ok(json) => {
-                let row: Option<ChangeRow> = serde_json::from_str(&json).unwrap_or(None);
-                match row {
-                    Some(row) => {
-                        let change = Revs {
-                            id: row.id,
-                            seq: row.seq,
-                            revs: row.changes,
-                        };
-                        Some(change)
+                                let changes: Vec<Change> = result
+                                    .remove("results")
+                                    .expect("missing results")
+                                    .as_array_mut()
+                                    .expect("results is not an array")
+                                    .iter_mut()
+                                    .map(|row| {
+                                        let row = row
+                                            .as_object_mut()
+                                            .expect("result row is not an object");
+
+                                        let id = row
+                                            .remove("id")
+                                            .expect("missing id")
+                                            .as_str()
+                                            .expect("id is not a string")
+                                            .to_string();
+
+                                        let mut docs_by_rev: HashMap<String, Value> =
+                                            HashMap::new();
+                                        if row.contains_key("doc") {
+                                            let mut doc = row.remove("doc").unwrap();
+                                            let rev = doc["_rev"]
+                                                .as_str()
+                                                .expect("Missing _rev property in doc")
+                                                .to_string();
+
+                                            // only use revision-one documents from changes feed
+                                            let (revpos, revid) = rev.split_once("-").unwrap();
+                                            if revpos == "1" {
+                                                doc["_revisions"] = json!({
+                                                    "start": 1,
+                                                    "ids": [revid.to_string()]
+                                                });
+                                                docs_by_rev.insert(rev, doc);
+                                            }
+                                        }
+
+                                        let revs = row
+                                            .remove("changes")
+                                            .expect("missing changes in row")
+                                            .as_array_mut()
+                                            .expect("changes is not an array")
+                                            .iter_mut()
+                                            .map(|change| {
+                                                let change = change
+                                                    .as_object_mut()
+                                                    .expect("change is not an object");
+
+                                                let rev = change
+                                                    .remove("rev")
+                                                    .expect("missing rev")
+                                                    .as_str()
+                                                    .expect("rev is not a string")
+                                                    .to_string();
+                                                let doc = docs_by_rev.remove(&rev);
+                                                Rev { rev, doc }
+                                            })
+                                            .collect();
+                                        Change { id, revs }
+                                    })
+                                    .collect();
+
+                                println!(
+                                    "[{}] # get_changes {:?} completed, got {} changes",
+                                    START_TIME.elapsed().as_millis(),
+                                    since,
+                                    changes.len()
+                                );
+                                ReplicationBatch { last_seq, changes }
+                            }
+                            _ => panic!("error reading changes response"),
+                        }
                     }
-                    None => None,
+                    _ => {
+                        let text = response.text().await;
+                        match text {
+                            Ok(text) => panic!("Problem reading changes: {}", text),
+                            _ => panic!("lol changes, no error response even"),
+                        }
+                    }
                 }
             }
-            _ => None,
-        });
-
-        // filter out None values
-        let filtered_stream = changes_stream.filter(|x| match x {
-            Some(_) => ready(true),
-            None => ready(false),
-        });
-
-        // unwrap Option
-        let unwrapped_stream = filtered_stream.map(|x| x.unwrap());
-
-        Ok(unwrapped_stream)
+            _ => panic!("could not connect to changes"),
+        }
     }
 
-    pub async fn get_diff(&self, batch: Vec<Revs>) -> Result<Vec<Revs>, Box<dyn Error>> {
-        println!("get diff for {} revs...", batch.len());
+    pub async fn get_diff(&self, mut batch: ReplicationBatch) -> ReplicationBatch {
+        println!(
+            "[{}]   # get_diff {}",
+            START_TIME.elapsed().as_millis(),
+            batch.nr()
+        );
 
         let mut url = self.url.clone();
         url.path_segments_mut().unwrap().push("_revs_diff");
 
         let mut revs: HashMap<String, Vec<String>> = HashMap::new();
-        for change in batch.iter() {
-            let id = change.id.clone();
-            let r = change.revs.iter().map(|c| c.rev.clone()).collect();
+        for change in batch.changes.iter() {
+            let id = change.id.to_string();
+            let r = change.revs.iter().map(|c| c.rev.to_string()).collect();
             revs.insert(id, r);
         }
-        let client = reqwest::Client::new();
-
-        let response = client.post(url).json(&revs).send().await?;
-
-        match response.status() {
-            StatusCode::OK => {
-                let body = response.json::<HashMap<String, RevsDiffEntry>>().await?;
-
-                let mut changes = vec![];
-
-                // TODO: make it nice
-
-                for change in batch.iter() {
-                    if body.contains_key(&change.id) {
-                        let entry = &body[&change.id];
-                        let c = Revs {
-                            id: change.id.clone(),
-                            seq: change.seq.clone(),
-                            revs: entry
-                                .missing
-                                .iter()
-                                .map(|rev| Rev {
-                                    rev: rev.to_string(),
-                                    doc: None,
-                                })
-                                .collect(),
-                        };
-                        changes.push(c);
-                    } else {
-                        let c = Revs {
-                            id: change.id.clone(),
-                            seq: change.seq.clone(),
-                            revs: vec![],
-                        };
-                        changes.push(c);
-                    };
-                }
-
-                println!("get diff for {} revs done", batch.len());
-                Ok(changes)
+        match revs.len() {
+            1 => {
+                println!(
+                    "[{}]   # get_diff {} completed: nothing to diff",
+                    START_TIME.elapsed().as_millis(),
+                    batch.nr()
+                );
+                batch
             }
-            _ => {
-                let text = response.text().await?;
-                panic!("Problem reading revs diff: {}", text)
+            size => {
+                let client = reqwest::Client::new();
+
+                // println!("seinding revs diff request: {:?}", revs);
+
+                let response = client.post(url).json(&revs).send().await;
+
+                match response {
+                    Ok(response) => match response.status() {
+                        StatusCode::OK => {
+                            let result = response.json::<HashMap<String, RevsDiffEntry>>().await;
+                            match result {
+                                Ok(body) => {
+                                    for change in &mut batch.changes {
+                                        let mut missing_revs = HashSet::new();
+
+                                        if body.contains_key(&change.id) {
+                                            let entry = &body[&change.id];
+
+                                            for rev in entry.missing.iter() {
+                                                missing_revs.insert(rev.to_string());
+                                            }
+                                        }
+
+                                        change.revs.retain(|rev| missing_revs.contains(&rev.rev));
+                                    }
+
+                                    println!(
+                                        "[{}]   # get_diff {} completed: diffed {} docs",
+                                        START_TIME.elapsed().as_millis(),
+                                        batch.nr(),
+                                        size
+                                    );
+
+                                    batch
+                                }
+                                _ => panic!("lol diff result, no response"),
+                            }
+                        }
+                        _ => {
+                            let text = response.text().await;
+                            match text {
+                                Ok(text) => panic!("Problem reading diff: {}", text),
+                                _ => panic!("lol diff, even no error response"),
+                            }
+                        }
+                    },
+                    _ => panic!("could not connect to diff"),
+                }
             }
         }
     }
 
-    pub async fn get_revs(&self, mut batch: Vec<Revs>) -> Result<Vec<Revs>, Box<dyn Error>> {
-        println!("get revs for {} revs...", batch.len());
+    pub async fn get_revs(&self, mut batch: ReplicationBatch) -> ReplicationBatch {
+        println!(
+            "[{}]   # get_revs {}",
+            START_TIME.elapsed().as_millis(),
+            batch.nr()
+        );
 
         let mut url = self.url.clone();
         url.path_segments_mut().unwrap().push("_bulk_get");
@@ -512,115 +575,167 @@ impl Database {
         url.query_pairs_mut().append_pair("attachments", "true");
 
         let mut docs = vec![];
-        for change in batch.iter() {
+        for change in batch.changes.iter() {
             for rev in change.revs.iter() {
-                let e = DocsRequestEntry {
-                    id: change.id.to_string(),
-                    rev: rev.rev.to_string(),
-                };
-                docs.push(e);
+                match &rev.doc {
+                    None => {
+                        let e = DocsRequestEntry {
+                            id: change.id.to_string(),
+                            rev: rev.rev.to_string(),
+                        };
+                        docs.push(e);
+                    }
+                    Some(_) => {}
+                }
             }
         }
-        let docs_request = DocsRequest { docs };
-
-        let client = reqwest::Client::new();
-        let response = client.post(url).json(&docs_request).send().await?;
-
-        match response.status() {
-            StatusCode::OK => {
-                let body = response.json::<DocsResponse>().await?;
-
-                // TODO: make it nice
-
-                // seqs by id hash
-                let mut seqs_by_id = HashMap::new();
-                for change in batch.iter() {
-                    seqs_by_id.insert(change.id.to_string(), change.seq.clone());
-                }
-
-                // docs by id hash
-                let mut docs_by_id = HashMap::new();
-                for entry in body.results.iter() {
-                    let id = entry.id.to_string();
-                    let revs: Vec<Rev> = vec![];
-                    docs_by_id.insert(id, revs);
-                }
-
-                // collect docs and group by id
-                for entry in body.results.iter() {
-                    for doc_ok in entry.docs.iter() {
-                        let id = entry.id.to_string();
-                        let doc = doc_ok.ok.clone();
-                        let rev = doc["_rev"].to_string();
-
-                        docs_by_id.entry(id).and_modify(|e| {
-                            let r = Rev {
-                                rev,
-                                doc: Some(doc),
-                            };
-                            e.push(r)
-                        });
-                    }
-                }
-
-                // build result
-                let mut result = vec![];
-                while let Some(change) = batch.pop() {
-                    if docs_by_id.contains_key(&change.id) {
-                        let seq = change.seq.clone();
-                        let revs = docs_by_id.remove(&change.id).unwrap();
-                        let r = Revs {
-                            id: change.id.clone(),
-                            seq,
-                            revs,
-                        };
-                        result.push(r);
-                    } else {
-                        result.push(change);
-                    }
-                }
-
-                result.reverse();
-                println!("get revs for {} revs done", result.len());
-                Ok(result)
+        match docs.len() {
+            0 => {
+                println!(
+                    "[{}]   # get_revs {} completed: nothing to fetch",
+                    START_TIME.elapsed().as_millis(),
+                    batch.nr()
+                );
+                batch
             }
-            _ => {
-                let text = response.text().await?;
-                panic!("Problem reading docs: {}", text)
+            size => {
+                let docs_request = DocsRequest { docs };
+
+                let client = reqwest::Client::new();
+                let response = client.post(url).json(&docs_request).send().await;
+
+                match response {
+                    Ok(response) => {
+                        match response.status() {
+                            StatusCode::OK => {
+                                let result = response.json::<DocsResponse>().await;
+                                match result {
+                                    Ok(mut body) => {
+                                        // docs by id hash
+                                        let mut docs_by_id = HashMap::new();
+                                        for entry in &mut body.results {
+                                            let id = entry.id.to_string();
+
+                                            // docs by rev hash
+                                            let mut docs_by_rev = HashMap::new();
+
+                                            for doc_ok in &mut entry.docs {
+                                                let ok = doc_ok.as_object_mut().unwrap();
+                                                if ok.contains_key("ok") {
+                                                    let doc = ok.remove("ok").unwrap();
+                                                    let rev = doc["_rev"]
+                                                        .as_str()
+                                                        .expect("Missing _rev property in doc")
+                                                        .to_string();
+                                                    docs_by_rev.insert(rev, doc);
+                                                }
+                                            }
+
+                                            docs_by_id.insert(id, docs_by_rev);
+                                        }
+
+                                        for change in &mut batch.changes {
+                                            if docs_by_id.contains_key(&change.id) {
+                                                let mut docs_by_rev =
+                                                    docs_by_id.remove(&change.id).unwrap();
+                                                for rev in &mut change.revs {
+                                                    if docs_by_rev.contains_key(&rev.rev) {
+                                                        let doc =
+                                                            docs_by_rev.remove(&rev.rev).unwrap();
+                                                        rev.doc = Some(doc);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        println!(
+                                            "[{}]   # get_revs {} completed: got {} revs",
+                                            START_TIME.elapsed().as_millis(),
+                                            batch.nr(),
+                                            size
+                                        );
+
+                                        batch
+                                    }
+                                    _ => panic!("lol get docs result, no response"),
+                                }
+                            }
+                            _ => {
+                                let text = response.text().await;
+                                match text {
+                                    Ok(text) => panic!("Problem reading docs: {}", text),
+                                    _ => panic!("lol get docs, no error response even"),
+                                }
+                            }
+                        }
+                    }
+                    _ => panic!("could not connect to get docs"),
+                }
             }
         }
     }
 
-    pub async fn save_revs(&self, batch: Vec<Revs>) -> Result<Vec<Revs>, Box<dyn Error>> {
-        println!("save revs for {} revs...", batch.len());
+    pub async fn save_revs(&self, mut batch: ReplicationBatch) -> ReplicationBatch {
+        println!(
+            "[{}]   # save_revs {}",
+            START_TIME.elapsed().as_millis(),
+            batch.nr()
+        );
 
         let mut url = self.url.clone();
         url.path_segments_mut().unwrap().push("_bulk_docs");
 
         let mut docs = vec![];
-        for change in batch.iter() {
+        for change in batch.changes.iter() {
             for rev in change.revs.iter() {
-                let doc = rev.doc.clone().unwrap();
-                docs.push(doc);
+                match &rev.doc {
+                    Some(doc) => docs.push(doc),
+                    None => {}
+                }
             }
         }
 
-        let bulk_docs_request = BulkDocsRequest {
-            docs,
-            new_edits: false,
-        };
-
-        let client = reqwest::Client::new();
-        let response = client.post(url).json(&bulk_docs_request).send().await?;
-
-        match response.status() {
-            StatusCode::CREATED => {
-                println!("save revs for {} revs done", batch.len());
-                Ok(batch)
+        match docs.len() {
+            0 => {
+                println!(
+                    "[{}]   # save_revs {} completed",
+                    START_TIME.elapsed().as_millis(),
+                    batch.nr()
+                );
+                batch
             }
-            _ => {
-                let text = response.text().await?;
-                panic!("Problem writing docs: {}", text)
+            size => {
+                let bulk_docs_request = BulkDocsRequest {
+                    docs,
+                    new_edits: false,
+                };
+
+                let client = reqwest::Client::new();
+                let response = client.post(url).json(&bulk_docs_request).send().await;
+
+                match response {
+                    Ok(response) => match response.status() {
+                        StatusCode::CREATED => {
+                            println!(
+                                "[{}]   # save_revs {} completed: saved {} revs",
+                                START_TIME.elapsed().as_millis(),
+                                batch.nr(),
+                                size
+                            );
+
+                            batch.changes = vec![];
+                            batch
+                        }
+                        _ => {
+                            let text = response.text().await;
+                            match text {
+                                Ok(text) => panic!("Problem saving docs: {}", text),
+                                _ => panic!("lol save docs, no error response even"),
+                            }
+                        }
+                    },
+                    _ => panic!("could not connect to save docs"),
+                }
             }
         }
     }

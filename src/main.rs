@@ -16,6 +16,14 @@ pub struct Args {
     /// Target database url
     #[clap(index = 2, required = true, value_name = "TARGET")]
     target: String,
+
+    /// Concurrency
+    #[clap(short, long, required = true, value_name = "N")]
+    concurrency: usize,
+
+    /// Batch size
+    #[clap(short, long, required = true, value_name = "N")]
+    batch_size: usize,
 }
 
 pub struct Microcouch {
@@ -34,7 +42,10 @@ impl Microcouch {
         let target_url = Url::parse(&self.args.target).expect("invalid target url");
         let target = Database::new(target_url);
 
-        match target.pull(&source).await? {
+        match target
+            .pull(&source, self.args.concurrency, self.args.batch_size)
+            .await?
+        {
             Some(stats) => {
                 println!("Replication complete: {:?}", stats);
             }
