@@ -1,6 +1,9 @@
 mod database;
+mod http_database;
+mod replicator;
 
-use crate::database::Database;
+use crate::http_database::HttpDatabase;
+use crate::replicator::replicate;
 
 use clap::Parser;
 use url::Url;
@@ -37,22 +40,18 @@ impl Microcouch {
 
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         let source_url = Url::parse(&self.args.source).expect("invalid source url");
-        let source = Database::new(source_url);
+        let source = HttpDatabase::new(source_url);
 
         let target_url = Url::parse(&self.args.target).expect("invalid target url");
-        let target = Database::new(target_url);
+        let target = HttpDatabase::new(target_url);
 
-        match target
-            .pull(&source, self.args.concurrency, self.args.batch_size)
-            .await?
-        {
-            Some(stats) => {
-                println!("Replication complete: {:?}", stats);
-            }
-            None => {
-                println!("Error, no result returned.");
-            }
-        };
+        replicate(
+            &source,
+            &target,
+            self.args.concurrency,
+            self.args.batch_size,
+        )
+        .await;
 
         Ok(())
     }

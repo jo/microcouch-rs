@@ -5,8 +5,7 @@ Currently there is only a HTTP adapter. Replication works between two http datab
 
 Next steps:
 
-* come up with a Database trait and implement the http database upon it
-* implement a sqlite database class
+* implement sqlite based local database struct
 
 and so much more to do :/
 
