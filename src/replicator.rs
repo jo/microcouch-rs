@@ -51,7 +51,8 @@ pub async fn replicate(
 
             changes
         })
-        // TODO: abort if changes are less than requested
+        // TODO: abort if changes are less than requested.
+        // Here we will utilize one additional unneeded request.
         .take_while(|x| future::ready(x.changes.len() > 0))
         .map(|x| replicate_batch(source, target, x))
         .buffered(concurrency)

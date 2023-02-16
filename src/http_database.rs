@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use lazy_static::lazy_static;
 use reqwest::StatusCode;
-use serde_json::json;
-use serde_json::value::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use tokio::time::Instant;
@@ -12,7 +10,7 @@ lazy_static! {
     static ref START_TIME: Instant = Instant::now();
 }
 
-use crate::database::{Change, Database, ReplicationBatch, ReplicationLog, Rev, ServerInfo};
+use crate::database::{Change, Database, ReplicationBatch, ReplicationLog, Rev, Doc, RevisionsTree, ServerInfo};
 
 #[derive(serde::Serialize, Debug)]
 struct Revisions {
@@ -20,7 +18,6 @@ struct Revisions {
     ids: Vec<String>,
 }
 
-// TODO: maybe we don't need this and can use HashMap directly
 #[derive(serde::Deserialize, Debug)]
 struct RevsDiffEntry {
     missing: Vec<String>,
@@ -45,13 +42,36 @@ struct DocsResponse {
 #[derive(serde::Deserialize, Debug)]
 struct DocsResponseEntry {
     id: String,
-    docs: Vec<Value>,
+    docs: Vec<DocsResponseEntryOk>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct DocsResponseEntryOk {
+    ok: Option<Doc>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct ChangesResponse {
+    last_seq: String,
+    results: Vec<ChangesResponseResultEntry>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct ChangesResponseResultEntry {
+    id: String,
+    doc: Option<Doc>,
+    changes: Vec<ChangesResponseResultChangesEntry>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct ChangesResponseResultChangesEntry {
+    rev: String,
 }
 
 #[derive(serde::Serialize, Debug)]
 struct BulkDocsRequest<'a> {
-    docs: Vec<&'a Value>,
     new_edits: bool,
+    docs: Vec<&'a Doc>,
 }
 
 pub struct HttpDatabase {
@@ -196,75 +216,42 @@ impl Database for HttpDatabase {
             Ok(response) => {
                 match response.status() {
                     StatusCode::OK => {
-                        let result = response.json::<Value>().await;
+                        let result = response.json::<ChangesResponse>().await;
                         match result {
-                            Ok(mut res) => {
-                                let result = res
-                                    .as_object_mut()
-                                    .expect("changes result is not an object");
-
-                                let last_seq = result
-                                    .remove("last_seq")
-                                    .expect("missing last_seq")
-                                    .as_str()
-                                    .expect("last_seq is not a string")
-                                    .to_string();
+                            Ok(mut result) => {
+                                let last_seq = result.last_seq;
 
                                 let changes: Vec<Change> = result
-                                    .remove("results")
-                                    .expect("missing results")
-                                    .as_array_mut()
-                                    .expect("results is not an array")
+                                    .results
                                     .iter_mut()
                                     .map(|row| {
-                                        let row = row
-                                            .as_object_mut()
-                                            .expect("result row is not an object");
+                                        let id = row.id.clone();
 
-                                        let id = row
-                                            .remove("id")
-                                            .expect("missing id")
-                                            .as_str()
-                                            .expect("id is not a string")
-                                            .to_string();
-
-                                        let mut docs_by_rev: HashMap<String, Value> =
+                                        let mut docs_by_rev: HashMap<String, Doc> =
                                             HashMap::new();
-                                        if row.contains_key("doc") {
-                                            let mut doc = row.remove("doc").unwrap();
-                                            let rev = doc["_rev"]
-                                                .as_str()
-                                                .expect("Missing _rev property in doc")
-                                                .to_string();
-
-                                            // only use revision-one documents from changes feed
-                                            let (revpos, revid) = rev.split_once("-").unwrap();
-                                            if revpos == "1" {
-                                                doc["_revisions"] = json!({
-                                                    "start": 1,
-                                                    "ids": [revid.to_string()]
-                                                });
-                                                docs_by_rev.insert(rev, doc);
+                                        
+                                        if let Some(mut doc) = row.doc.take() {
+                                            match doc._rev.clone() {
+                                                Some(rev) => {
+                                                    // only use revision-one documents from changes feed
+                                                    let (revpos, revid) = rev.split_once("-").unwrap();
+                                                    if revpos == "1" {
+                                                        doc._revisions = Some(RevisionsTree {
+                                                            start: 1,
+                                                            ids: vec![revid.to_string()]
+                                                        });
+                                                        docs_by_rev.insert(rev, doc);
+                                                    }
+                                                },
+                                                None => println!("Very strange, got a doc without rev: {:?}", &doc)
                                             }
                                         }
 
                                         let revs = row
-                                            .remove("changes")
-                                            .expect("missing changes in row")
-                                            .as_array_mut()
-                                            .expect("changes is not an array")
+                                            .changes
                                             .iter_mut()
                                             .map(|change| {
-                                                let change = change
-                                                    .as_object_mut()
-                                                    .expect("change is not an object");
-
-                                                let rev = change
-                                                    .remove("rev")
-                                                    .expect("missing rev")
-                                                    .as_str()
-                                                    .expect("rev is not a string")
-                                                    .to_string();
+                                                let rev = change.rev.clone();
                                                 let doc = docs_by_rev.remove(&rev);
                                                 Rev { rev, doc }
                                             })
@@ -439,14 +426,13 @@ impl Database for HttpDatabase {
                                             let mut docs_by_rev = HashMap::new();
 
                                             for doc_ok in &mut entry.docs {
-                                                let ok = doc_ok.as_object_mut().unwrap();
-                                                if ok.contains_key("ok") {
-                                                    let doc = ok.remove("ok").unwrap();
-                                                    let rev = doc["_rev"]
-                                                        .as_str()
-                                                        .expect("Missing _rev property in doc")
-                                                        .to_string();
-                                                    docs_by_rev.insert(rev, doc);
+                                                if let Some(doc) = doc_ok.ok.take() {
+                                                    match doc._rev.clone() {
+                                                        Some(rev) => {
+                                                            docs_by_rev.insert(rev, doc);
+                                                        },
+                                                        None => println!("Very strange, got a doc without rev: {:?}", &doc)
+                                                    }
                                                 }
                                             }
 

@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use lazy_static::lazy_static;
+use serde::{Deserialize, Serialize};
 use serde_json::value::Value;
+use std::collections::HashMap;
 use tokio::time::Instant;
 
 lazy_static! {
@@ -30,20 +32,68 @@ pub struct Change {
 #[derive(Debug)]
 pub struct Rev {
     pub rev: String,
-    pub doc: Option<Value>,
+    pub doc: Option<Doc>,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Doc {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _rev: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _deleted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _attachments: Option<HashMap<String, Attachment>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _conflicts: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _deleted_conflicts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _local_seq: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _revs_info: Option<Vec<RevInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _revisions: Option<RevisionsTree>,
+
+    #[serde(flatten)]
+    pub body: HashMap<String, Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Attachment {
+    pub content_type: String,
+    pub digest: Option<String>,
+    pub length: Option<u32>,
+    pub revpos: Option<u32>,
+    pub stub: Option<bool>,
+    pub data: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RevisionsTree {
+    pub ids: Vec<String>,
+    pub start: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RevInfo {
+    pub rev: String,
+    pub status: String,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct ServerInfo {
     pub uuid: String,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct DatabaseInfo {
     pub update_seq: String,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ReplicationLog {
     pub _id: String,
     pub source_last_seq: String,
