@@ -1,7 +1,7 @@
 use crate::database::Database;
 
 use crate::database::{ReplicationBatch, ReplicationLog, ServerInfo};
-use clap::lazy_static::lazy_static;
+use lazy_static::lazy_static;
 use futures::future;
 use futures::{join, stream, StreamExt};
 use std::sync::{Arc, Mutex};
@@ -51,6 +51,7 @@ pub async fn replicate(
 
             changes
         })
+        // TODO: abort if changes are less than requested
         .take_while(|x| future::ready(x.changes.len() > 0))
         .map(|x| replicate_batch(source, target, x))
         .buffered(concurrency)

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use clap::lazy_static::lazy_static;
+use lazy_static::lazy_static;
 use reqwest::StatusCode;
 use serde_json::json;
 use serde_json::value::Value;
@@ -93,7 +93,11 @@ impl Database for HttpDatabase {
     }
 
     async fn get_replication_log(&self, replication_id: &str) -> Option<ReplicationLog> {
-        println!("get replication log...");
+        println!(
+            "[{}] # {} get replication log...",
+            START_TIME.elapsed().as_millis(),
+            &self.url.path(),
+        );
 
         let id = format!("_local/{}", replication_id);
         let mut url = self.url.clone();
@@ -127,8 +131,10 @@ impl Database for HttpDatabase {
         url.path_segments_mut().unwrap().push(&replication_log._id);
 
         println!(
-            "save replication log at checkpoint {}",
-            replication_log.source_last_seq
+            "[{}] # {} save replication log at checkpoint {}",
+            START_TIME.elapsed().as_millis(),
+            &self.url.path(),
+            replication_log.source_last_seq,
         );
 
         let client = reqwest::Client::new();
@@ -141,7 +147,9 @@ impl Database for HttpDatabase {
         match response.status() {
             StatusCode::CREATED => {
                 println!(
-                    "save replication log at checkpoint {} done",
+                    "[{}] # {} save replication log at checkpoint {} done",
+                    START_TIME.elapsed().as_millis(),
+                    &self.url.path(),
                     replication_log.source_last_seq
                 );
                 ()
@@ -158,8 +166,9 @@ impl Database for HttpDatabase {
 
     async fn get_changes(&self, since: Option<String>, batch_size: usize) -> ReplicationBatch {
         println!(
-            "[{}] # get_changes {:?}",
+            "[{}] # {} get_changes {:?}",
             START_TIME.elapsed().as_millis(),
+            &self.url.path(),
             since
         );
 
@@ -265,8 +274,9 @@ impl Database for HttpDatabase {
                                     .collect();
 
                                 println!(
-                                    "[{}] # get_changes {:?} completed, got {} changes",
+                                    "[{}] # {} get_changes {:?} completed, got {} changes",
                                     START_TIME.elapsed().as_millis(),
+                                    &self.url.path(),
                                     since,
                                     changes.len()
                                 );
@@ -290,8 +300,9 @@ impl Database for HttpDatabase {
 
     async fn get_diff(&self, mut batch: ReplicationBatch) -> ReplicationBatch {
         println!(
-            "[{}]   # get_diff {}",
+            "[{}]   # {} get_diff {}",
             START_TIME.elapsed().as_millis(),
+            &self.url.path(),
             batch.nr()
         );
 
@@ -307,8 +318,9 @@ impl Database for HttpDatabase {
         match revs.len() {
             1 => {
                 println!(
-                    "[{}]   # get_diff {} completed: nothing to diff",
+                    "[{}]   # {} get_diff {} completed: nothing to diff",
                     START_TIME.elapsed().as_millis(),
+                    &self.url.path(),
                     batch.nr()
                 );
                 batch
@@ -341,8 +353,9 @@ impl Database for HttpDatabase {
                                     }
 
                                     println!(
-                                        "[{}]   # get_diff {} completed: diffed {} docs",
+                                        "[{}]   # {} get_diff {} completed: diffed {} docs",
                                         START_TIME.elapsed().as_millis(),
+                                        &self.url.path(),
                                         batch.nr(),
                                         size
                                     );
@@ -368,8 +381,9 @@ impl Database for HttpDatabase {
 
     async fn get_revs(&self, mut batch: ReplicationBatch) -> ReplicationBatch {
         println!(
-            "[{}]   # get_revs {}",
+            "[{}]   # {} get_revs {}",
             START_TIME.elapsed().as_millis(),
+            &self.url.path(),
             batch.nr()
         );
 
@@ -396,8 +410,9 @@ impl Database for HttpDatabase {
         match docs.len() {
             0 => {
                 println!(
-                    "[{}]   # get_revs {} completed: nothing to fetch",
+                    "[{}]   # {} get_revs {} completed: nothing to fetch",
                     START_TIME.elapsed().as_millis(),
+                    &self.url.path(),
                     batch.nr()
                 );
                 batch
@@ -453,8 +468,9 @@ impl Database for HttpDatabase {
                                         }
 
                                         println!(
-                                            "[{}]   # get_revs {} completed: got {} revs",
+                                            "[{}]   # {} get_revs {} completed: got {} revs",
                                             START_TIME.elapsed().as_millis(),
+                                            &self.url.path(),
                                             batch.nr(),
                                             size
                                         );
@@ -481,8 +497,9 @@ impl Database for HttpDatabase {
 
     async fn save_revs(&self, mut batch: ReplicationBatch) -> ReplicationBatch {
         println!(
-            "[{}]   # save_revs {}",
+            "[{}]   # {} save_revs {}",
             START_TIME.elapsed().as_millis(),
+            &self.url.path(),
             batch.nr()
         );
 
@@ -502,8 +519,9 @@ impl Database for HttpDatabase {
         match docs.len() {
             0 => {
                 println!(
-                    "[{}]   # save_revs {} completed",
+                    "[{}]   # {} save_revs {} completed",
                     START_TIME.elapsed().as_millis(),
+                    &self.url.path(),
                     batch.nr()
                 );
                 batch
@@ -521,8 +539,9 @@ impl Database for HttpDatabase {
                     Ok(response) => match response.status() {
                         StatusCode::CREATED => {
                             println!(
-                                "[{}]   # save_revs {} completed: saved {} revs",
+                                "[{}]   # {} save_revs {} completed: saved {} revs",
                                 START_TIME.elapsed().as_millis(),
+                                &self.url.path(),
                                 batch.nr(),
                                 size
                             );

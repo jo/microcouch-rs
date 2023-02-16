@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use clap::lazy_static::lazy_static;
+use lazy_static::lazy_static;
 use serde_json::value::Value;
 use tokio::time::Instant;
 
