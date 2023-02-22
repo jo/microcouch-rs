@@ -1,9 +1,11 @@
 mod database;
 mod http_database;
 mod replicator;
+mod sqlite_database;
 
 use crate::http_database::HttpDatabase;
 use crate::replicator::replicate;
+use crate::sqlite_database::SqliteDatabase;
 
 use clap::Parser;
 use url::Url;
@@ -42,16 +44,28 @@ impl Microcouch {
         let source_url = Url::parse(&self.args.source).expect("invalid source url");
         let source = HttpDatabase::new(source_url);
 
-        let target_url = Url::parse(&self.args.target).expect("invalid target url");
-        let target = HttpDatabase::new(target_url);
+        if self.args.target.starts_with("https://") {
+            let target_url = Url::parse(&self.args.target).expect("invalid target url");
+            let target = HttpDatabase::new(target_url);
 
-        replicate(
-            &source,
-            &target,
-            self.args.concurrency,
-            self.args.batch_size,
-        )
-        .await;
+            replicate(
+                &source,
+                &target,
+                self.args.concurrency,
+                self.args.batch_size,
+            )
+            .await;
+        } else {
+            let target = SqliteDatabase::new(&self.args.target);
+
+            replicate(
+                &source,
+                &target,
+                self.args.concurrency,
+                self.args.batch_size,
+            )
+            .await;
+        }
 
         Ok(())
     }

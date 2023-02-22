@@ -1,8 +1,7 @@
 use async_trait::async_trait;
 use lazy_static::lazy_static;
 use reqwest::StatusCode;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tokio::time::Instant;
 use url::Url;
 
@@ -10,7 +9,9 @@ lazy_static! {
     static ref START_TIME: Instant = Instant::now();
 }
 
-use crate::database::{Change, Database, ReplicationBatch, ReplicationLog, Rev, Doc, RevisionsTree, ServerInfo};
+use crate::database::{
+    Change, Database, Doc, ReplicationBatch, ReplicationLog, Rev, RevisionsTree, ServerInfo,
+};
 
 #[derive(serde::Serialize, Debug)]
 struct Revisions {
@@ -112,6 +113,46 @@ impl Database for HttpDatabase {
         }
     }
 
+    async fn save_doc(&self, doc: Doc) -> () {
+        let url = self.url.clone();
+
+        let client = reqwest::Client::new();
+        client
+            .post(url)
+            .json(&doc)
+            .send()
+            .await
+            .expect("Cannot save doc");
+        // TODO: update doc with rev
+    }
+
+    async fn get_doc(&self, id: &str) -> Option<Doc> {
+        let mut url = self.url.clone();
+        url.path_segments_mut().unwrap().push(id);
+
+        let response = reqwest::get(url).await;
+        match response {
+            Ok(response) => match response.status() {
+                StatusCode::OK => {
+                    let result = response.json::<Doc>().await;
+                    match result {
+                        Ok(doc) => Some(doc),
+                        _ => panic!("error reading doc"),
+                    }
+                }
+                StatusCode::NOT_FOUND => None,
+                _ => {
+                    let text = response
+                        .text()
+                        .await
+                        .expect("wow, cannot even read save doc response");
+                    panic!("Problem reading doc: {}", text)
+                }
+            },
+            _ => panic!("could not connect to server to get doc"),
+        }
+    }
+
     async fn get_replication_log(&self, replication_id: &str) -> Option<ReplicationLog> {
         println!(
             "[{}] # {} get replication log...",
@@ -199,8 +240,11 @@ impl Database for HttpDatabase {
         url.query_pairs_mut().append_pair("style", "all_docs");
         url.query_pairs_mut().append_pair("limit", &limit);
         url.query_pairs_mut().append_pair("seq_interval", &limit);
+
+        // fetch docs and attachments inline
         url.query_pairs_mut().append_pair("include_docs", "true");
         url.query_pairs_mut().append_pair("attachments", "true");
+
         match since {
             Some(ref since) => {
                 url.query_pairs_mut().append_pair("since", &since);
@@ -227,23 +271,26 @@ impl Database for HttpDatabase {
                                     .map(|row| {
                                         let id = row.id.clone();
 
-                                        let mut docs_by_rev: HashMap<String, Doc> =
-                                            HashMap::new();
-                                        
+                                        let mut docs_by_rev: HashMap<String, Doc> = HashMap::new();
+
                                         if let Some(mut doc) = row.doc.take() {
                                             match doc._rev.clone() {
                                                 Some(rev) => {
                                                     // only use revision-one documents from changes feed
-                                                    let (revpos, revid) = rev.split_once("-").unwrap();
+                                                    let (revpos, revid) =
+                                                        rev.split_once("-").unwrap();
                                                     if revpos == "1" {
                                                         doc._revisions = Some(RevisionsTree {
                                                             start: 1,
-                                                            ids: vec![revid.to_string()]
+                                                            ids: vec![revid.to_string()],
                                                         });
                                                         docs_by_rev.insert(rev, doc);
                                                     }
-                                                },
-                                                None => println!("Very strange, got a doc without rev: {:?}", &doc)
+                                                }
+                                                None => panic!(
+                                                    "Very strange, got a doc without rev: {:?}",
+                                                    &doc
+                                                ),
                                             }
                                         }
 
@@ -303,6 +350,7 @@ impl Database for HttpDatabase {
             revs.insert(id, r);
         }
         match revs.len() {
+            // hmmm - really?
             1 => {
                 println!(
                     "[{}]   # {} get_diff {} completed: nothing to diff",
@@ -431,7 +479,7 @@ impl Database for HttpDatabase {
                                                         Some(rev) => {
                                                             docs_by_rev.insert(rev, doc);
                                                         },
-                                                        None => println!("Very strange, got a doc without rev: {:?}", &doc)
+                                                        None => panic!("Very strange, got a doc without rev: {:?}", &doc)
                                                     }
                                                 }
                                             }

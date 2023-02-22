@@ -9,8 +9,15 @@ base64).
 
 Next steps:
 
-* Implement sqlite-based local database structure, maybe in-memory first.
+* implement rev tree merging and the missing sqlite db methods
 
 And there's so much more to do :/ Let's see what this becomes.
+
+## Tests
+To run the test, a running CouchDB server is needed:
+
+```sh
+COUCHDB_URL=https://admin:password@couchdb.example.com cargo test 
+```
 
 (c) 2022-2023 Johannes J. Schmidt

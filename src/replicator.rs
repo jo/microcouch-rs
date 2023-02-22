@@ -1,9 +1,9 @@
 use crate::database::Database;
 
 use crate::database::{ReplicationBatch, ReplicationLog, ServerInfo};
-use lazy_static::lazy_static;
 use futures::future;
 use futures::{join, stream, StreamExt};
+use lazy_static::lazy_static;
 use std::sync::{Arc, Mutex};
 use tokio::time::Instant;
 use uuid::Uuid;

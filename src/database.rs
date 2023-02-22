@@ -61,6 +61,44 @@ pub struct Doc {
     pub body: HashMap<String, Value>,
 }
 
+impl Doc {
+    pub fn new(_id: Option<String>, body: HashMap<String, Value>) -> Self {
+        Self {
+            _id,
+
+            _rev: None,
+            _deleted: None,
+            _attachments: None,
+            _conflicts: None,
+
+            _deleted_conflicts: None,
+            _local_seq: None,
+            _revs_info: None,
+            _revisions: None,
+
+            body,
+        }
+    }
+
+    pub fn new_with_rev(_id: Option<String>, _rev: Option<String>, body: HashMap<String, Value>) -> Self {
+        Self {
+            _id,
+
+            _rev,
+            _deleted: None,
+            _attachments: None,
+            _conflicts: None,
+
+            _deleted_conflicts: None,
+            _local_seq: None,
+            _revs_info: None,
+            _revisions: None,
+
+            body,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Attachment {
     pub content_type: String,
@@ -93,7 +131,7 @@ pub struct DatabaseInfo {
     pub update_seq: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReplicationLog {
     pub _id: String,
     pub source_last_seq: String,
@@ -104,6 +142,10 @@ pub struct ReplicationLog {
 pub trait Database {
     async fn get_server_info(&self) -> ServerInfo;
 
+    async fn save_doc(&self, doc: Doc) -> ();
+    async fn get_doc(&self, id: &str) -> Option<Doc>;
+
+    // TODO: can't this be a reference?
     async fn get_replication_log(&self, replication_id: &str) -> Option<ReplicationLog>;
     async fn save_replication_log(&self, replication_log: ReplicationLog) -> ();
 
