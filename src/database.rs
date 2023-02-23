@@ -18,7 +18,7 @@ pub struct ReplicationBatch {
 // just for debugging
 impl ReplicationBatch {
     pub fn nr(&self) -> String {
-        match self.last_seq.split_once("-") {
+        match self.last_seq.split_once('-') {
             Some((nr, _)) => nr.to_string(),
             None => self.last_seq.to_owned(),
         }

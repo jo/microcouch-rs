@@ -143,18 +143,15 @@ impl Database for SqliteDatabase {
             .prepare("select source_last_seq, session_id from replication_logs where id = ?;")
             .expect("could not prepare statement");
 
-        let mut rows = stmt
-            .query([&id])
-            .expect("could not execute select statement");
-
-        match rows.next().expect("could not get row") {
-            Some(row) => Some(ReplicationLog {
-                _id: id,
-                source_last_seq: row.get(0).unwrap(),
-                session_id: row.get(1).unwrap(),
-            }),
-            None => None,
-        }
+        stmt
+            .query_row([&id], |row| {
+                Ok(Some(ReplicationLog {
+                    _id: id.to_owned(),
+                    source_last_seq: row.get(0).unwrap(),
+                    session_id: row.get(1).unwrap(),
+                }))
+            })
+            .unwrap_or(None)
     }
 
     async fn save_replication_log(&self, replication_log: ReplicationLog) -> () {

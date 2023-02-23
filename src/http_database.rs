@@ -213,7 +213,6 @@ impl Database for HttpDatabase {
                     &self.url.path(),
                     replication_log.source_last_seq
                 );
-                ()
             }
             _ => {
                 let text = response
@@ -245,12 +244,9 @@ impl Database for HttpDatabase {
         url.query_pairs_mut().append_pair("include_docs", "true");
         url.query_pairs_mut().append_pair("attachments", "true");
 
-        match since {
-            Some(ref since) => {
-                url.query_pairs_mut().append_pair("since", &since);
-            }
-            None => {}
-        };
+        if let Some(ref since) = since {
+            url.query_pairs_mut().append_pair("since", since);
+        }
 
         let client = reqwest::Client::new();
 
@@ -278,7 +274,7 @@ impl Database for HttpDatabase {
                                                 Some(rev) => {
                                                     // only use revision-one documents from changes feed
                                                     let (revpos, revid) =
-                                                        rev.split_once("-").unwrap();
+                                                        rev.split_once('-').unwrap();
                                                     if revpos == "1" {
                                                         doc._revisions = Some(RevisionsTree {
                                                             start: 1,
