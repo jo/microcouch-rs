@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use rusqlite::{named_params, Connection};
 use uuid::Uuid;
 
-use crate::database::{Database, Doc, Rev, Change, ReplicationBatch, ReplicationLog, ServerInfo};
+use crate::database::{Change, Database, Doc, ReplicationBatch, ReplicationLog, Rev, ServerInfo};
 
 pub struct SqliteDatabase {
     uuid: String,
@@ -103,31 +103,35 @@ impl Database for SqliteDatabase {
             .unwrap_or(0);
 
         seq += 1;
-        tx.execute("insert into revs (id, rev, seq, body) values (:id, :rev, :seq, :body)
+        tx.execute(
+            "insert into revs (id, rev, seq, body) values (:id, :rev, :seq, :body)
                     on conflict(id, rev) do update set seq=excluded.seq, body=excluded.body;",
-                    named_params! {
-                        ":id": &doc._id,
-                        ":rev": &doc._rev,
-                        ":seq": &seq,
-                        ":body": &serde_json::to_string(&doc.body).expect("Could not serialize doc")
-                    }).expect("Could not store rev");
+            named_params! {
+                ":id": &doc._id,
+                ":rev": &doc._rev,
+                ":seq": &seq,
+                ":body": &serde_json::to_string(&doc.body).expect("Could not serialize doc")
+            },
+        )
+        .expect("Could not store rev");
 
         tx.commit().expect("Could not commit transaction");
     }
 
     async fn get_doc(&self, _id: &str) -> Option<Doc> {
-        match self.connection()
+        match self
+            .connection()
             .query_row("select rev, body from revs;", [], |row| {
                 let body: String = row.get(1).unwrap();
-                    Ok(Doc::new_with_rev(
-                            Some(_id.to_owned()),
-                            Some(row.get(0).unwrap()),
-                            serde_json::from_str(&body).unwrap(),
-                    ))
-                }) {
-                Ok(doc) => Some(doc),
-                _ => None
-            }
+                Ok(Doc::new_with_rev(
+                    Some(_id.to_owned()),
+                    Some(row.get(0).unwrap()),
+                    serde_json::from_str(&body).unwrap(),
+                ))
+            }) {
+            Ok(doc) => Some(doc),
+            _ => None,
+        }
     }
 
     async fn get_replication_log(&self, replication_id: &str) -> Option<ReplicationLog> {
@@ -174,13 +178,15 @@ impl Database for SqliteDatabase {
 
         let since = match since {
             Some(seq) => seq.parse::<i32>().unwrap(),
-            None => 0
+            None => 0,
         };
 
         let mut stmt = conn
-            .prepare("select seq, id, rev, body from revs
+            .prepare(
+                "select seq, id, rev, body from revs
                       where seq > ?
-                      order by seq;")
+                      order by seq;",
+            )
             .expect("could not prepare statement");
 
         let mut changes: Vec<Change> = vec![];
@@ -214,10 +220,7 @@ impl Database for SqliteDatabase {
 
         println!("these are the changes: {:?}", changes);
 
-        ReplicationBatch {
-            last_seq,
-            changes,
-        }
+        ReplicationBatch { last_seq, changes }
     }
 
     async fn get_diff(&self, batch: ReplicationBatch) -> ReplicationBatch {

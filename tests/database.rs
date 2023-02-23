@@ -5,18 +5,19 @@
 
 #[cfg(test)]
 mod tests {
-    use microcouch::{Database, HttpDatabase, SqliteDatabase, Doc};
+    use microcouch::{Database, Doc, HttpDatabase, SqliteDatabase};
+    use reqwest::Url;
+    use std::collections::HashMap;
     use std::env;
     use std::fs;
-    use std::collections::HashMap;
-    use reqwest::Url;
 
     struct Fixture<'a> {
         db: &'a (dyn Database + 'static),
     }
 
     fn setup_http_database(name: &str) -> HttpDatabase {
-        let couchdb_url = env::var("COUCHDB_URL").expect("missing COUCHDB_URL environment variable");
+        let couchdb_url =
+            env::var("COUCHDB_URL").expect("missing COUCHDB_URL environment variable");
         let couchdb_url = Url::parse(&couchdb_url).expect("invalid source url");
         let url = couchdb_url.join(name).unwrap();
 
@@ -43,15 +44,11 @@ mod tests {
     fn test<F: Fn(Fixture)>(f: F) {
         let http_db = setup_http_database("test-database");
 
-        f(Fixture {
-            db: &http_db
-        });
+        f(Fixture { db: &http_db });
 
         let sqlite_db = setup_sqlite_database("test-database");
 
-        f(Fixture {
-            db: &sqlite_db
-        });
+        f(Fixture { db: &sqlite_db });
     }
 
     macro_rules! aw {

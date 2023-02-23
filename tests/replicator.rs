@@ -5,11 +5,11 @@
 
 #[cfg(test)]
 mod tests {
-    use microcouch::{Database, Doc, HttpDatabase, SqliteDatabase, replicate};
+    use microcouch::{replicate, Database, Doc, HttpDatabase, SqliteDatabase};
+    use reqwest::Url;
     use std::collections::HashMap;
     use std::env;
     use std::fs;
-    use reqwest::Url;
 
     // // FIXME: it does not work - doesn't have a size known at compile-time
     // // https://stackoverflow.com/questions/26212397/how-do-i-specify-that-a-struct-field-must-implement-a-trait
@@ -20,7 +20,8 @@ mod tests {
     // }
 
     fn setup_http_database(name: &str) -> HttpDatabase {
-        let couchdb_url = env::var("COUCHDB_URL").expect("missing COUCHDB_URL environment variable");
+        let couchdb_url =
+            env::var("COUCHDB_URL").expect("missing COUCHDB_URL environment variable");
         let couchdb_url = Url::parse(&couchdb_url).expect("invalid source url");
         let url = couchdb_url.join(name).unwrap();
 
@@ -50,20 +51,20 @@ mod tests {
     //         source: &setup_http_database("test-source"),
     //         target: &setup_http_database("test-target"),
     //     });
-    //     
+    //
     //     // http -> sqlite
     //     f(Fixture {
     //         source: &setup_http_database("test-source"),
     //         target: &setup_sqlite_database("test-target"),
     //     });
-    //     
+    //
     //     // not implemented yet
     //     // sqlite -> http
     //     // f(Fixture {
     //     //     source: &setup_sqlite_database("test-source"),
     //     //     target: &setup_http_database("test-target"),
     //     // });
-    //     // 
+    //     //
     //     // sqlite -> sqlite
     //     // f(Fixture {
     //     //     source: &setup_sqlite_database("test-source"),
@@ -86,13 +87,13 @@ mod tests {
     //         let source = f.source;
     //         let target = f.target;
     //         aw!(replicate(source, target, 4, 64));
-    //         
+    //
     //          let target_result = aw!(target.get_doc("mydoc"));
     //          assert!(target_result.is_some());
     //          let target_doc = target_result.unwrap();
 
     //         assert_eq!(target_doc._id, Some("mydoc".to_string()));
-    //         
+    //
     //         let source_doc = aw!(f.source.get_doc("mydoc")).unwrap();
     //         assert_eq!(target_doc._rev, source_doc._rev);
     //     })
@@ -102,18 +103,18 @@ mod tests {
     fn replicate_single_document_from_http_to_http() {
         let source = setup_http_database("test-source");
         let target = setup_http_database("test-target");
-        
+
         let doc = Doc::new(Some("mydoc".to_string()), HashMap::new());
         aw!(source.save_doc(doc));
 
         aw!(replicate(&source, &target, 4, 64));
-        
+
         let target_result = aw!(target.get_doc("mydoc"));
         assert!(target_result.is_some());
         let target_doc = target_result.unwrap();
 
         assert_eq!(target_doc._id, Some("mydoc".to_string()));
-        
+
         let source_result = aw!(source.get_doc("mydoc"));
         assert!(source_result.is_some());
         let source_doc = source_result.unwrap();
@@ -124,18 +125,18 @@ mod tests {
     fn replicate_single_document_from_http_to_sqlite() {
         let source = setup_http_database("test-source");
         let target = setup_sqlite_database("test-target");
-        
+
         let doc = Doc::new(Some("mydoc".to_string()), HashMap::new());
         aw!(source.save_doc(doc));
 
         aw!(replicate(&source, &target, 4, 64));
-        
+
         let target_result = aw!(target.get_doc("mydoc"));
         assert!(target_result.is_some());
         let target_doc = target_result.unwrap();
 
         assert_eq!(target_doc._id, Some("mydoc".to_string()));
-        
+
         let source_result = aw!(source.get_doc("mydoc"));
         assert!(source_result.is_some());
         let source_doc = source_result.unwrap();
@@ -146,18 +147,18 @@ mod tests {
     fn replicate_single_document_from_sqlite_to_http() {
         let source = setup_sqlite_database("test-source");
         let target = setup_http_database("test-target");
-        
+
         let doc = Doc::new(Some("mydoc".to_string()), HashMap::new());
         aw!(source.save_doc(doc));
 
         aw!(replicate(&source, &target, 4, 64));
-        
+
         let target_result = aw!(target.get_doc("mydoc"));
         assert!(target_result.is_some());
         let target_doc = target_result.unwrap();
 
         assert_eq!(target_doc._id, Some("mydoc".to_string()));
-        
+
         let source_result = aw!(source.get_doc("mydoc"));
         assert!(source_result.is_some());
         let source_doc = source_result.unwrap();
@@ -168,18 +169,18 @@ mod tests {
     fn replicate_single_document_from_sqlite_to_sqlite() {
         let source = setup_sqlite_database("test-source");
         let target = setup_sqlite_database("test-target");
-        
+
         let doc = Doc::new(Some("mydoc".to_string()), HashMap::new());
         aw!(source.save_doc(doc));
 
         aw!(replicate(&source, &target, 4, 64));
-        
+
         let target_result = aw!(target.get_doc("mydoc"));
         assert!(target_result.is_some());
         let target_doc = target_result.unwrap();
 
         assert_eq!(target_doc._id, Some("mydoc".to_string()));
-        
+
         let source_result = aw!(source.get_doc("mydoc"));
         assert!(source_result.is_some());
         let source_doc = source_result.unwrap();

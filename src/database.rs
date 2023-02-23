@@ -20,7 +20,7 @@ impl ReplicationBatch {
     pub fn nr(&self) -> String {
         match self.last_seq.split_once("-") {
             Some((nr, _)) => nr.to_string(),
-            None => self.last_seq.to_owned()
+            None => self.last_seq.to_owned(),
         }
     }
 }
@@ -82,7 +82,11 @@ impl Doc {
         }
     }
 
-    pub fn new_with_rev(_id: Option<String>, _rev: Option<String>, body: HashMap<String, Value>) -> Self {
+    pub fn new_with_rev(
+        _id: Option<String>,
+        _rev: Option<String>,
+        body: HashMap<String, Value>,
+    ) -> Self {
         Self {
             _id,
 
