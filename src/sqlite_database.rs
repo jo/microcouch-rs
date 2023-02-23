@@ -123,7 +123,7 @@ impl Database for SqliteDatabase {
             .connection()
             .query_row("select rev, body from revs;", [], |row| {
                 let body: String = row.get(1).unwrap();
-                Ok(Doc::new_with_rev(
+                Ok(Doc::new(
                     Some(_id.to_owned()),
                     Some(row.get(0).unwrap()),
                     serde_json::from_str(&body).unwrap(),
@@ -195,7 +195,7 @@ impl Database for SqliteDatabase {
                 let rev: String = row.get(2).unwrap();
                 let body: String = row.get(3).unwrap();
 
-                let doc = Doc::new_with_rev(
+                let doc = Doc::new(
                     Some(id.to_owned()),
                     Some(rev.to_owned()),
                     serde_json::from_str(&body).unwrap(),

@@ -1,7 +1,12 @@
 [package]
 name = "microcouch"
+description = "embeddable minimalistic CouchDB implementation"
 version = "0.1.0"
 edition = "2021"
+readme = "README.md"
+license = "Apache-2.0"
+authors = ["Johannes J. Schmidt <schmidt@pm.me>"]
+keywords = ["CouchDB", "database"]
 
 [dependencies]
 async-trait = "0.1.77"

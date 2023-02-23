@@ -64,29 +64,7 @@ pub struct Doc {
 }
 
 impl Doc {
-    pub fn new(_id: Option<String>, body: HashMap<String, Value>) -> Self {
-        Self {
-            _id,
-
-            _rev: None,
-            _deleted: None,
-            _attachments: None,
-            _conflicts: None,
-
-            _deleted_conflicts: None,
-            _local_seq: None,
-            _revs_info: None,
-            _revisions: None,
-
-            body,
-        }
-    }
-
-    pub fn new_with_rev(
-        _id: Option<String>,
-        _rev: Option<String>,
-        body: HashMap<String, Value>,
-    ) -> Self {
+    pub fn new(_id: Option<String>, _rev: Option<String>, body: HashMap<String, Value>) -> Self {
         Self {
             _id,
 

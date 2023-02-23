@@ -81,7 +81,7 @@ mod tests {
     // #[test]
     // fn replicate_single_document() {
     //     test(|f| {
-    //         let doc = Doc::new(Some("mydoc".to_string()), HashMap::new());
+    //         let doc = Doc::new(Some("mydoc".to_string()), None, HashMap::new());
     //         aw!(f.source.save_doc(doc));
 
     //         let source = f.source;
@@ -104,7 +104,7 @@ mod tests {
         let source = setup_http_database("test-source");
         let target = setup_http_database("test-target");
 
-        let doc = Doc::new(Some("mydoc".to_string()), HashMap::new());
+        let doc = Doc::new(Some("mydoc".to_string()), None, HashMap::new());
         aw!(source.save_doc(doc));
 
         aw!(replicate(&source, &target, 4, 64));
@@ -126,7 +126,7 @@ mod tests {
         let source = setup_http_database("test-source");
         let target = setup_sqlite_database("test-target");
 
-        let doc = Doc::new(Some("mydoc".to_string()), HashMap::new());
+        let doc = Doc::new(Some("mydoc".to_string()), None, HashMap::new());
         aw!(source.save_doc(doc));
 
         aw!(replicate(&source, &target, 4, 64));
@@ -153,7 +153,7 @@ mod tests {
     //     let source = setup_sqlite_database("test-source");
     //     let target = setup_http_database("test-target");
 
-    //     let doc = Doc::new(Some("mydoc".to_string()), HashMap::new());
+    //     let doc = Doc::new(Some("mydoc".to_string()), None, HashMap::new());
     //     aw!(source.save_doc(doc));
 
     //     aw!(replicate(&source, &target, 4, 64));
@@ -175,7 +175,7 @@ mod tests {
         let source = setup_sqlite_database("test-source");
         let target = setup_sqlite_database("test-target");
 
-        let doc = Doc::new(Some("mydoc".to_string()), HashMap::new());
+        let doc = Doc::new(Some("mydoc".to_string()), None, HashMap::new());
         aw!(source.save_doc(doc));
 
         aw!(replicate(&source, &target, 4, 64));

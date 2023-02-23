@@ -60,7 +60,7 @@ mod tests {
     #[test]
     fn save_document() {
         test(|f| {
-            let doc = Doc::new(Some("mydoc".to_string()), HashMap::new());
+            let doc = Doc::new(Some("mydoc".to_string()), None, HashMap::new());
 
             aw!(f.db.save_doc(doc));
         })
@@ -69,7 +69,7 @@ mod tests {
     #[test]
     fn save_and_get_document() {
         test(|f| {
-            let doc = Doc::new(Some("mydoc".to_string()), HashMap::new());
+            let doc = Doc::new(Some("mydoc".to_string()), None, HashMap::new());
 
             aw!(f.db.save_doc(doc));
             let retrieved_doc = aw!(f.db.get_doc("mydoc")).unwrap();
