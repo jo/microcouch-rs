@@ -36,8 +36,15 @@ jobs:
           toolchain: stable
           override: true
 
+      - name: Start CouchDB
+        uses: iamssen/couchdb-github-action@master
+        with:
+          couchdb-version: 3
+
       - name: Run cargo test
         uses: actions-rs/cargo@v1
+        env:
+          COUCHDB_URL: http://admin:password@127.0.0.1:5984
         with:
           command: test
 
