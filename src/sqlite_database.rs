@@ -218,8 +218,6 @@ impl Database for SqliteDatabase {
             changes.push(row.unwrap());
         }
 
-        println!("these are the changes: {:?}", changes);
-
         ReplicationBatch { last_seq, changes }
     }
 
