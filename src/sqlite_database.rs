@@ -143,15 +143,14 @@ impl Database for SqliteDatabase {
             .prepare("select source_last_seq, session_id from replication_logs where id = ?;")
             .expect("could not prepare statement");
 
-        stmt
-            .query_row([&id], |row| {
-                Ok(Some(ReplicationLog {
-                    _id: id.to_owned(),
-                    source_last_seq: row.get(0).unwrap(),
-                    session_id: row.get(1).unwrap(),
-                }))
-            })
-            .unwrap_or(None)
+        stmt.query_row([&id], |row| {
+            Ok(Some(ReplicationLog {
+                _id: id.to_owned(),
+                source_last_seq: row.get(0).unwrap(),
+                session_id: row.get(1).unwrap(),
+            }))
+        })
+        .unwrap_or(None)
     }
 
     async fn save_replication_log(&self, replication_log: ReplicationLog) -> () {
