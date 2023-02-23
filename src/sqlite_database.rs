@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use rusqlite::{named_params, Connection};
 use uuid::Uuid;
 
-use crate::database::{Database, Doc, ReplicationBatch, ReplicationLog, ServerInfo};
+use crate::database::{Database, Doc, Rev, Change, ReplicationBatch, ReplicationLog, ServerInfo};
 
 pub struct SqliteDatabase {
     uuid: String,
@@ -169,10 +169,54 @@ impl Database for SqliteDatabase {
         .expect("could not execute upsert statement");
     }
 
-    async fn get_changes(&self, _since: Option<String>, _batch_size: usize) -> ReplicationBatch {
+    async fn get_changes(&self, since: Option<String>, _batch_size: usize) -> ReplicationBatch {
+        let conn = self.connection();
+
+        let since = match since {
+            Some(seq) => seq.parse::<i32>().unwrap(),
+            None => 0
+        };
+
+        let mut stmt = conn
+            .prepare("select seq, id, rev, body from revs
+                      where seq > ?
+                      order by seq;")
+            .expect("could not prepare statement");
+
+        let mut changes: Vec<Change> = vec![];
+        let mut last_seq = "0".to_string();
+        let rows = stmt
+            .query_map([since], |row| {
+                let seq_i: i32 = row.get(0).unwrap();
+                last_seq = seq_i.to_string();
+                let id: String = row.get(1).unwrap();
+                let rev: String = row.get(2).unwrap();
+                let body: String = row.get(3).unwrap();
+
+                let doc = Doc::new_with_rev(
+                    Some(id.to_owned()),
+                    Some(rev.to_owned()),
+                    serde_json::from_str(&body).unwrap(),
+                );
+                Ok(Change {
+                    id,
+                    revs: vec![Rev {
+                        rev,
+                        doc: Some(doc),
+                    }],
+                })
+            })
+            .expect("could not execute select statement");
+
+        for row in rows {
+            changes.push(row.unwrap());
+        }
+
+        println!("these are the changes: {:?}", changes);
+
         ReplicationBatch {
-            last_seq: "0".to_owned(),
-            changes: vec![],
+            last_seq,
+            changes,
         }
     }
 

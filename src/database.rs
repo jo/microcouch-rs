@@ -18,8 +18,10 @@ pub struct ReplicationBatch {
 // just for debugging
 impl ReplicationBatch {
     pub fn nr(&self) -> String {
-        let (nr, _) = self.last_seq.split_once("-").unwrap();
-        nr.to_string()
+        match self.last_seq.split_once("-") {
+            Some((nr, _)) => nr.to_string(),
+            None => self.last_seq.to_owned()
+        }
     }
 }
 

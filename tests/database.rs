@@ -35,7 +35,7 @@ mod tests {
 
     fn setup_sqlite_database(name: &str) -> SqliteDatabase {
         let filename = format!("{}.db", name);
-        fs::remove_file(&filename);
+        fs::remove_file(&filename).unwrap_or(());
 
         SqliteDatabase::new(name)
     }
