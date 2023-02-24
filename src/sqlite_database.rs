@@ -11,10 +11,8 @@ pub struct SqliteDatabase {
 
 impl SqliteDatabase {
     // TODO: make this a filename
-    pub fn new(id: &str) -> Self {
-        let filename = format!("{}.db", id);
-
-        let conn = Connection::open(&filename).unwrap();
+    pub fn new(filename: &str) -> Self {
+        let conn = Connection::open(filename).unwrap();
 
         // setup schema
         conn.execute(
@@ -54,7 +52,7 @@ impl SqliteDatabase {
             .expect("could not prepare statement");
 
         let mut rows = stmt
-            .query([&id])
+            .query([filename])
             .expect("could not execute select statement");
 
         let uuid = match rows.next().expect("could not get row") {
@@ -69,14 +67,17 @@ impl SqliteDatabase {
                     )
                     .expect("could not prepare statement");
 
-                stmt.execute(&[(":id", &id), (":uuid", &uuid.as_str())])
+                stmt.execute(&[(":id", filename), (":uuid", uuid.as_str())])
                     .expect("could not execute upsert statement");
 
                 uuid
             }
         };
 
-        Self { uuid, filename }
+        Self {
+            uuid,
+            filename: filename.to_owned(),
+        }
     }
 
     fn connection(&self) -> Connection {
@@ -93,7 +94,7 @@ impl Database for SqliteDatabase {
     }
 
     async fn save_doc(&self, mut doc: Doc) -> () {
-        doc._rev = Some("1-made-up-rev".to_owned());
+        doc._rev = Some("1-967a00dff5e02add41819138abb3284d".to_owned());
 
         let mut conn = self.connection();
         let tx = conn.transaction().expect("Could not start transaction");

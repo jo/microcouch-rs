@@ -19,11 +19,11 @@ mod tests {
     //     target: &'a (dyn Database),
     // }
 
-    fn setup_http_database(name: &str) -> HttpDatabase {
+    fn setup_http_database(dbname: &str) -> HttpDatabase {
         let couchdb_url =
             env::var("COUCHDB_URL").expect("missing COUCHDB_URL environment variable");
         let couchdb_url = Url::parse(&couchdb_url).expect("invalid source url");
-        let url = couchdb_url.join(name).unwrap();
+        let url = couchdb_url.join(dbname).unwrap();
 
         let client = reqwest::blocking::Client::new();
         client
@@ -38,11 +38,10 @@ mod tests {
         HttpDatabase::new(url)
     }
 
-    fn setup_sqlite_database(name: &str) -> SqliteDatabase {
-        let filename = format!("{}.db", name);
+    fn setup_sqlite_database(filename: &str) -> SqliteDatabase {
         fs::remove_file(&filename).unwrap_or(());
 
-        SqliteDatabase::new(name)
+        SqliteDatabase::new(filename)
     }
 
     // fn test<F: Fn(Fixture)>(f: F) {
@@ -55,20 +54,20 @@ mod tests {
     //     // http -> sqlite
     //     f(Fixture {
     //         source: &setup_http_database("test-source"),
-    //         target: &setup_sqlite_database("test-target"),
+    //         target: &setup_sqlite_database("tests/dbs/test-target.db"),
     //     });
     //
     //     // not implemented yet
     //     // sqlite -> http
     //     // f(Fixture {
-    //     //     source: &setup_sqlite_database("test-source"),
+    //     //     source: &setup_sqlite_database("tests/dbs/test-source.db"),
     //     //     target: &setup_http_database("test-target"),
     //     // });
     //     //
     //     // sqlite -> sqlite
     //     // f(Fixture {
-    //     //     source: &setup_sqlite_database("test-source"),
-    //     //     target: &setup_sqlite_database("test-target"),
+    //     //     source: &setup_sqlite_database("tests/dbs/test-source.db"),
+    //     //     target: &setup_sqlite_database("tests/dbs/test-target.db"),
     //     // });
     // }
 
@@ -124,7 +123,7 @@ mod tests {
     #[test]
     fn replicate_single_document_from_http_to_sqlite() {
         let source = setup_http_database("test-source");
-        let target = setup_sqlite_database("test-target");
+        let target = setup_sqlite_database("tests/dbs/test-target.db");
 
         let doc = Doc::new(Some("mydoc".to_string()), None, HashMap::new());
         aw!(source.save_doc(doc));
@@ -143,37 +142,32 @@ mod tests {
         assert_eq!(target_doc._rev, source_doc._rev);
     }
 
-    // this currently fails with
-    // thread 'tests::replicate_single_document_from_sqlite_to_http' panicked at 'assertion failed: `(left == right)`
-    //  left: `Some("1-967a00dff5e02add41819138abb3284d")`,
-    //  right: `Some("1-made-up-rev")`', tests/replicator.rs:165:9
-    // depending on the couch version
-    // #[test]
-    // fn replicate_single_document_from_sqlite_to_http() {
-    //     let source = setup_sqlite_database("test-source");
-    //     let target = setup_http_database("test-target");
+    #[test]
+    fn replicate_single_document_from_sqlite_to_http() {
+        let source = setup_sqlite_database("tests/dbs/test-source.db");
+        let target = setup_http_database("test-target");
 
-    //     let doc = Doc::new(Some("mydoc".to_string()), None, HashMap::new());
-    //     aw!(source.save_doc(doc));
+        let doc = Doc::new(Some("mydoc".to_string()), None, HashMap::new());
+        aw!(source.save_doc(doc));
 
-    //     aw!(replicate(&source, &target, 4, 64));
+        aw!(replicate(&source, &target, 4, 64));
 
-    //     let target_result = aw!(target.get_doc("mydoc"));
-    //     assert!(target_result.is_some());
-    //     let target_doc = target_result.unwrap();
+        let target_result = aw!(target.get_doc("mydoc"));
+        assert!(target_result.is_some());
+        let target_doc = target_result.unwrap();
 
-    //     assert_eq!(target_doc._id, Some("mydoc".to_string()));
+        assert_eq!(target_doc._id, Some("mydoc".to_string()));
 
-    //     let source_result = aw!(source.get_doc("mydoc"));
-    //     assert!(source_result.is_some());
-    //     let source_doc = source_result.unwrap();
-    //     assert_eq!(target_doc._rev, source_doc._rev);
-    // }
+        let source_result = aw!(source.get_doc("mydoc"));
+        assert!(source_result.is_some());
+        let source_doc = source_result.unwrap();
+        assert_eq!(target_doc._rev, source_doc._rev);
+    }
 
     #[test]
     fn replicate_single_document_from_sqlite_to_sqlite() {
-        let source = setup_sqlite_database("test-source");
-        let target = setup_sqlite_database("test-target");
+        let source = setup_sqlite_database("tests/dbs/test-source.db");
+        let target = setup_sqlite_database("tests/dbs/test-target.db");
 
         let doc = Doc::new(Some("mydoc".to_string()), None, HashMap::new());
         aw!(source.save_doc(doc));

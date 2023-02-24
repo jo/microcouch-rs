@@ -15,11 +15,11 @@ mod tests {
         db: &'a (dyn Database + 'static),
     }
 
-    fn setup_http_database(name: &str) -> HttpDatabase {
+    fn setup_http_database(dbname: &str) -> HttpDatabase {
         let couchdb_url =
             env::var("COUCHDB_URL").expect("missing COUCHDB_URL environment variable");
         let couchdb_url = Url::parse(&couchdb_url).expect("invalid source url");
-        let url = couchdb_url.join(name).unwrap();
+        let url = couchdb_url.join(dbname).unwrap();
 
         let client = reqwest::blocking::Client::new();
         client
@@ -34,11 +34,10 @@ mod tests {
         HttpDatabase::new(url)
     }
 
-    fn setup_sqlite_database(name: &str) -> SqliteDatabase {
-        let filename = format!("{}.db", name);
+    fn setup_sqlite_database(filename: &str) -> SqliteDatabase {
         fs::remove_file(&filename).unwrap_or(());
 
-        SqliteDatabase::new(name)
+        SqliteDatabase::new(filename)
     }
 
     fn test<F: Fn(Fixture)>(f: F) {
@@ -46,7 +45,7 @@ mod tests {
 
         f(Fixture { db: &http_db });
 
-        let sqlite_db = setup_sqlite_database("test-database");
+        let sqlite_db = setup_sqlite_database("tests/dbs/test-database.db");
 
         f(Fixture { db: &sqlite_db });
     }
