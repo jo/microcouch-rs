@@ -1,5 +1,6 @@
 mod database;
 mod http_database;
+mod merge;
 mod replicator;
 mod sqlite_database;
 

@@ -1,23 +1,25 @@
 # Microcouch Rust
-This is a Rust-based microcouch. It is still a work in progress. The design was
-worked out in the [JavaScript microcouch](https://github.com/jo/microcouch-js)
-and this Rust version will follow it.
 
-Currently there is only one HTTP adapter. Replication works between two HTTP
+I'm stupid and megalomaniacal enough to strumble into developing a
+stripped-down, minimalist CouchDB implementation in Rust. I call it Microcouch.
+I've already got it [pretty far in
+JavaScript](https://github.com/jo/microcouch-js).
+
+There are HTTP and SQLite adapters, and a replicator. Replication already works
+with quiet well performance and memory characteristics between two HTTP
 databases, including attachments. However, these are processed inline (as
 base64).
-
-Next steps:
-
-* implement rev tree merging and the missing sqlite db methods
-
-And there's so much more to do :/ Let's see what this becomes.
 
 ## Tests
 To run the test, a running CouchDB server is needed:
 
 ```sh
-COUCHDB_URL=https://admin:password@couchdb.example.com cargo test 
+docker run -e COUCHDB_USER=admin -e COUCHDB_PASSWORD=password -p 5984:5984 couchdb
 ```
 
-(c) 2022-2023 Johannes J. Schmidt
+in another terminal, run
+```sh
+COUCHDB_URL=http://admin:password@127.0.0.1:5984 cargo test
+```
+
+(c) 2022-2024 Johannes J. Schmidt
